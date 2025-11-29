@@ -2,49 +2,87 @@ package expo.modules.truesign
 
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import java.net.URL
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import java.security.KeyPairGenerator
+import java.security.KeyStore
+import java.security.Signature
+import android.util.Base64
+import java.nio.charset.Charset
 
 class TrueSignModule : Module() {
-  // Each module class must implement the definition function. The definition consists of components
-  // that describes the module's functionality and behavior.
-  // See https://docs.expo.dev/modules/module-api for more details about available components.
+  // The unique ID for our key inside the hardware chip
+  private val KEY_ALIAS = "TrueSign_Hardware_Key_v1"
+
   override fun definition() = ModuleDefinition {
-    // Sets the name of the module that JavaScript code will use to refer to the module. Takes a string as an argument.
-    // Can be inferred from module's class name, but it's recommended to set it explicitly for clarity.
-    // The module will be accessible from `requireNativeModule('TrueSignModule')` in JavaScript.
-    Name("TrueSignModule")
+    // The name we use in JavaScript
+    Name("TrueSign")
 
-    // Defines constant property on the module.
-    Constant("PI") {
-      Math.PI
-    }
+    // Function 1: Generate or Load the KeyPair
+    Function("initializeKeys") {
+      try {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
 
-    // Defines event names that the module can send to JavaScript.
-    Events("onChange")
+        // Check if key already exists
+        if (!keyStore.containsAlias(KEY_ALIAS)) {
+          // Generate a new KeyPair inside the Secure Enclave
+          val keyGenerator = KeyPairGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_EC,
+            "AndroidKeyStore"
+          )
+          
+          val parameterSpec = KeyGenParameterSpec.Builder(
+            KEY_ALIAS,
+            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+          )
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
+            .setUserAuthenticationRequired(false) // Set to true if you want Biometric prompt
+            .build()
 
-    // Defines a JavaScript synchronous function that runs the native code on the JavaScript thread.
-    Function("hello") {
-      "Hello world! 👋"
-    }
-
-    // Defines a JavaScript function that always returns a Promise and whose native code
-    // is by default dispatched on the different thread than the JavaScript runtime runs on.
-    AsyncFunction("setValueAsync") { value: String ->
-      // Send an event to JavaScript.
-      sendEvent("onChange", mapOf(
-        "value" to value
-      ))
-    }
-
-    // Enables the module to be used as a native view. Definition components that are accepted as part of
-    // the view definition: Prop, Events.
-    View(TrueSignModuleView::class) {
-      // Defines a setter for the `url` prop.
-      Prop("url") { view: TrueSignModuleView, url: URL ->
-        view.webView.loadUrl(url.toString())
+          keyGenerator.initialize(parameterSpec)
+          keyGenerator.generateKeyPair()
+          return@Function "KEYS_GENERATED"
+        }
+        return@Function "KEYS_EXIST"
+      } catch (e: Exception) {
+        throw Exception("Hardware Key Error: " + e.message)
       }
-      // Defines an event that the view can send to JavaScript.
-      Events("onLoad")
+    }
+
+    // Function 2: Sign a String (simulating a photo hash)
+    Function("signData") { data: String ->
+      try {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+
+        val entry = keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.PrivateKeyEntry
+        if (entry == null) {
+          throw Exception("Key not found. Call initializeKeys() first.")
+        }
+
+        // Create the signature using the Hardware Key
+        val signature = Signature.getInstance("SHA256withECDSA")
+        signature.initSign(entry.privateKey)
+        signature.update(data.toByteArray(Charset.defaultCharset()))
+
+        val signatureBytes = signature.sign()
+        
+        // Return as Base64 string so JS can read it
+        return@Function Base64.encodeToString(signatureBytes, Base64.NO_WRAP)
+      } catch (e: Exception) {
+        throw Exception("Signing Failed: " + e.message)
+      }
+    }
+    
+    // Function 3: Get Public Key (To verify later)
+    Function("getPublicKey") {
+       val keyStore = KeyStore.getInstance("AndroidKeyStore")
+       keyStore.load(null)
+       val cert = keyStore.getCertificate(KEY_ALIAS)
+       return@Function Base64.encodeToString(cert.publicKey.encoded, Base64.NO_WRAP)
     }
   }
 }
+

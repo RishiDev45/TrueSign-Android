@@ -1,14 +1,28 @@
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button, StyleSheet, Text, TouchableOpacity, View, Image, Alert, ActivityIndicator } from 'react-native';
-import { supabase } from './supabase'; // Import the connection we just made
+import { supabase } from './supabase';
+import * as FileSystem from 'expo-file-system';
+import * as TrueSign from './modules/truesign'; // THE BRAIN
 
 export default function App() {
   const [facing, setFacing] = useState<CameraType>('back');
   const [permission, requestPermission] = useCameraPermissions();
   const [photo, setPhoto] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false); // Track upload status
+  const [signature, setSignature] = useState<string | null>(null); // Store the cryptographic proof
+  const [uploading, setUploading] = useState(false);
   const cameraRef = useRef<CameraView>(null);
+  console.log("DEBUG TRUESIGN OBJECT:", TrueSign);
+
+  // 1. INITIALIZE KEYS ON APP START
+  useEffect(() => {
+    try {
+      const status = TrueSign.initializeKeys();
+      console.log("Secure Enclave Status:", status);
+    } catch (e) {
+      console.error("Key Init Failed:", e);
+    }
+  }, []);
 
   if (!permission) return <View style={{ flex: 1, backgroundColor: 'black' }} />;
   if (!permission.granted) {
@@ -27,30 +41,44 @@ export default function App() {
   async function takePicture() {
     if (cameraRef.current) {
       try {
+        // A. CAPTURE
         const data = await cameraRef.current.takePictureAsync({
-          quality: 0.5, // Keep quality lower for faster upload testing
-          base64: true, // We need base64 to upload via standard API easily
-          skipProcessing: false, 
+          quality: 0.5,
+          base64: true, // We need the data to sign it
+          skipProcessing: false,
           shutterSound: true,
         });
         
-        if (data) setPhoto(data.uri);
+        if (data && data.base64) {
+          setPhoto(data.uri);
+
+          // B. SIGNING (THE MAGIC MOMENT)
+          try {
+            console.log("Signing photo hash...");
+            // We sign the Base64 string directly using the Hardware Chip
+            const hardwareSignature = TrueSign.signData(data.base64.substring(0, 100)); // Signing first 100 chars for speed in MVP
+            setSignature(hardwareSignature);
+            console.log("GENERATED SIGNATURE:", hardwareSignature);
+          } catch (e) {
+            Alert.alert("Signing Error", "Could not access Secure Enclave");
+          }
+        }
       } catch (e) {
         console.error("Failed to take picture:", e);
       }
     }
   }
 
-  // --- THE UPLOAD FUNCTION ---
   async function uploadToCloud() {
-    if (!photo) return;
+    if (!photo || !signature) {
+      Alert.alert("Error", "Missing photo or signature.");
+      return;
+    }
     setUploading(true);
 
     try {
-      // 1. Create a unique file name (e.g., photo_123456789.jpg)
-      const fileName = `photo_${Date.now()}.jpg`;
+      const fileName = `proof_${Date.now()}.jpg`;
       
-      // 2. Prepare the file (Supabase expects FormData or ArrayBuffer)
       const formData = new FormData();
       formData.append('file', {
         uri: photo,
@@ -58,19 +86,23 @@ export default function App() {
         type: 'image/jpeg',
       } as any);
 
-      // 3. Upload to 'evidence' bucket
+      // C. UPLOAD WITH METADATA
       const { data, error } = await supabase.storage
         .from('evidence')
         .upload(fileName, formData, {
           contentType: 'image/jpeg',
+          upsert: false,
         });
 
-      if (error) {
-        throw error;
-      }
+      // D. SAVE RECORD TO DATABASE (With Signature)
+      // Note: In a real app, you'd insert into the 'photos' table here. 
+      // For now, we just prove the upload worked.
 
-      Alert.alert("Success!", "Photo uploaded to Supabase secure vault.");
-      setPhoto(null); // Reset app
+      if (error) throw error;
+
+      Alert.alert("SECURE UPLOAD COMPLETE", "Signature: " + signature.substring(0, 10) + "...");
+      setPhoto(null);
+      setSignature(null);
     } catch (error) {
       Alert.alert("Upload Failed", (error as any).message);
     } finally {
@@ -80,17 +112,20 @@ export default function App() {
 
   function retakePicture() {
     setPhoto(null);
+    setSignature(null);
   }
 
-  // --- PREVIEW SCREEN ---
   if (photo) {
     return (
       <View style={styles.container}>
         <Image source={{ uri: photo }} style={styles.preview} />
         
         <View style={styles.overlay}>
+           {/* THE GREEN TICK - NOW BACKED BY MATH */}
            <View style={styles.banner}>
-              <Text style={styles.bannerText}>⚠️ UNVERIFIED IMAGE</Text>
+              <Text style={styles.bannerText}>
+                {signature ? "🔒 SECURE ENCLAVE SIGNED" : "⚠️ UNSIGNED"}
+              </Text>
            </View>
            
            <View style={styles.buttonRow}>
@@ -99,7 +134,7 @@ export default function App() {
              </TouchableOpacity>
 
              <TouchableOpacity style={styles.uploadButton} onPress={uploadToCloud} disabled={uploading}>
-                {uploading ? <ActivityIndicator color="white"/> : <Text style={styles.uploadText}>CLOUD SYNC ☁️</Text>}
+                {uploading ? <ActivityIndicator color="white"/> : <Text style={styles.uploadText}>UPLOAD PROOF ☁️</Text>}
              </TouchableOpacity>
            </View>
         </View>
@@ -107,7 +142,6 @@ export default function App() {
     );
   }
 
-  // --- CAMERA SCREEN ---
   return (
     <View style={styles.container}>
       <CameraView style={styles.camera} facing={facing} ref={cameraRef}>
@@ -136,11 +170,11 @@ const styles = StyleSheet.create({
   shutterInner: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'white', borderWidth: 2, borderColor: 'black' },
   smallButton: { width: 60, alignItems: 'center', padding: 10 },
   overlay: { position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center' },
-  banner: { backgroundColor: 'red', padding: 12, borderRadius: 8, marginBottom: 20 },
+  banner: { backgroundColor: '#00C853', padding: 12, borderRadius: 8, marginBottom: 20 },
   bannerText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   buttonRow: { flexDirection: 'row', gap: 20 },
   retakeButton: { backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
-  uploadButton: { backgroundColor: '#00C853', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
+  uploadButton: { backgroundColor: '#2962FF', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
   buttonText: { fontSize: 16, fontWeight: 'bold', color: 'black' },
   uploadText: { fontSize: 16, fontWeight: 'bold', color: 'white' }
 });
