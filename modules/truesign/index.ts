@@ -1,5 +1,16 @@
-// Reexport the native module. On web, it will be resolved to TrueSignModule.web.ts
-// and on native platforms to TrueSignModule.ts
-export { default } from './src/TrueSignModule';
-export { default as TrueSignModuleView } from './src/TrueSignModuleView';
-export * from  './src/TrueSignModule.types';
+import { requireNativeModule } from 'expo-modules-core';
+
+// WE FIXED THE NAME HERE: It must be 'TrueSign', not 'TrueSignModule'
+const TrueSign = requireNativeModule('TrueSign');
+
+export function initializeKeys() {
+  return TrueSign.initializeKeys();
+}
+
+export function signData(data: string) {
+  return TrueSign.signData(data);
+}
+
+export function getPublicKey() {
+  return TrueSign.getPublicKey();
+}
