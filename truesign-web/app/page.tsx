@@ -47,7 +47,7 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4" id="download">
             {/* DOWNLOAD BUTTON */}
             <Link
-              href="https://drive.google.com/file/d/1HKvshguik43OrHmR6V70H_z3LBRFyWdx/view?usp=sharing"
+              href="https://drive.google.com/file/d/1ocugkmi1Wg5RxO2wLqr2Ue9lSc7Z6T1U/view?usp=sharing"
               className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-full transition-all hover:scale-105 shadow-lg shadow-blue-900/20 w-full sm:w-auto"
             >
               Download Beta (Android)
